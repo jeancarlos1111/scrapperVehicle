@@ -16,9 +16,9 @@ async function main() {
     await crawler.init();
 
     // Configurar parámetros del crawler
-    crawler.maxPages = 50; // Número máximo de páginas a visitar
-    crawler.maxDepth = 2;  // Profundidad máxima de navegación
-    crawler.delay = 2000;  // Delay entre requests (ms)
+    crawler.maxPages = 100; // Número máximo de páginas a visitar
+    crawler.maxDepth = 5;  // Profundidad máxima de navegación
+    crawler.delay = 5000;  // Delay entre requests (ms)
 
     // Opción 1: Usar URLs semilla específicas
     const seedUrls = [
@@ -47,6 +47,7 @@ async function main() {
     console.log(`✅ URLs visitadas: ${stats.urls}`);
     console.log(`🚗 Vehículos extraídos: ${stats.vehicles}`);
     console.log(`🔧 Autopartes extraídas: ${stats.parts}`);
+    console.log(`🚫 URLs inválidas: ${stats.invalidUrls}`);
     console.log(`\n💾 Base de datos: vehicles.db`);
 
   } catch (error) {

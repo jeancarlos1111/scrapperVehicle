@@ -69,11 +69,25 @@ class Database {
       )
     `);
 
+    // Tabla de URLs inválidas (bloqueadas, no responsivas, errores)
+    await run(`
+      CREATE TABLE IF NOT EXISTS invalid_urls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url TEXT UNIQUE NOT NULL,
+        error_type TEXT NOT NULL,
+        error_message TEXT,
+        failed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        retry_count INTEGER DEFAULT 0
+      )
+    `);
+
     // Índices para búsquedas rápidas
     await run(`CREATE INDEX IF NOT EXISTS idx_vehicles_brand ON vehicles(brand)`);
     await run(`CREATE INDEX IF NOT EXISTS idx_vehicles_year ON vehicles(year)`);
     await run(`CREATE INDEX IF NOT EXISTS idx_parts_brand ON parts(brand)`);
     await run(`CREATE INDEX IF NOT EXISTS idx_visited_url ON visited_urls(url)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_invalid_url ON invalid_urls(url)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_invalid_error_type ON invalid_urls(error_type)`);
 
     // Garantizar unicidad de vehículos por combinación (brand, model, year)
     try {
@@ -89,6 +103,38 @@ class Database {
     const get = promisify(this.db.get.bind(this.db));
     const result = await get('SELECT id FROM visited_urls WHERE url = ?', [url]);
     return result !== undefined;
+  }
+
+  async isUrlInvalid(url) {
+    const get = promisify(this.db.get.bind(this.db));
+    const result = await get('SELECT id, retry_count FROM invalid_urls WHERE url = ?', [url]);
+    return result !== undefined ? result : null;
+  }
+
+  async markUrlInvalid(url, errorType, errorMessage = null) {
+    const run = promisify(this.db.run.bind(this.db));
+    const get = promisify(this.db.get.bind(this.db));
+    try {
+      // Verificar si ya existe
+      const existing = await this.isUrlInvalid(url);
+      
+      if (existing) {
+        // Incrementar contador de reintentos
+        await run(
+          'UPDATE invalid_urls SET retry_count = retry_count + 1, failed_at = CURRENT_TIMESTAMP, error_message = ? WHERE url = ?',
+          [errorMessage || 'Reintento fallido', url]
+        );
+      } else {
+        // Insertar nueva URL inválida
+        await run(
+          'INSERT INTO invalid_urls (url, error_type, error_message) VALUES (?, ?, ?)',
+          [url, errorType, errorMessage]
+        );
+      }
+      console.log(`   🚫 URL marcada como inválida (${errorType}): ${url}`);
+    } catch (error) {
+      console.error('Error marcando URL como inválida:', error);
+    }
   }
 
   async markUrlVisited(url, relevanceScore = null, contentType = null) {
@@ -159,12 +205,37 @@ class Database {
     const vehicles = await get('SELECT COUNT(*) as count FROM vehicles') || { count: 0 };
     const parts = await get('SELECT COUNT(*) as count FROM parts') || { count: 0 };
     const urls = await get('SELECT COUNT(*) as count FROM visited_urls') || { count: 0 };
+    const invalidUrls = await get('SELECT COUNT(*) as count FROM invalid_urls') || { count: 0 };
     
     return {
       vehicles: vehicles.count || 0,
       parts: parts.count || 0,
-      urls: urls.count || 0
+      urls: urls.count || 0,
+      invalidUrls: invalidUrls.count || 0
     };
+  }
+
+  /**
+   * Obtiene URLs que fueron visitadas pero no tienen datos extraídos
+   * (útil para reintentar)
+   */
+  async getPendingUrls(limit = 50) {
+    const all = promisify(this.db.all.bind(this.db));
+    try {
+      const results = await all(`
+        SELECT v.url 
+        FROM visited_urls v
+        LEFT JOIN vehicles veh ON v.id = veh.url_id
+        LEFT JOIN parts p ON v.id = p.url_id
+        WHERE veh.id IS NULL AND p.id IS NULL
+        ORDER BY v.visited_at DESC
+        LIMIT ?
+      `, [limit]);
+      return results.map(r => r.url);
+    } catch (error) {
+      console.error('Error obteniendo URLs pendientes:', error);
+      return [];
+    }
   }
 
   async close() {

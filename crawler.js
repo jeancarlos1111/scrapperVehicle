@@ -46,12 +46,13 @@ class AutonomousCrawler {
         '--lang=es-MX,es'
       ],
       ignoreHTTPSErrors: true,
-      defaultViewport: null
+      defaultViewport: null,
+      protocolTimeout: 300000 // 300 segundos (5 minutos) para evitar timeouts en páginas complejas
     });
     console.log('✅ Navegador iniciado con modo stealth');
   }
 
-  async start(seedUrls = []) {
+  async start(seedUrls = [], resumeFromPending = true) {
     if (seedUrls.length === 0) {
       // URLs semilla por defecto - sitios conocidos de vehículos
       seedUrls = [
@@ -63,14 +64,27 @@ class AutonomousCrawler {
       ];
     }
 
-    // Agregar URLs semilla a la cola
+    // Si se permite reanudar, cargar URLs pendientes primero
+    if (resumeFromPending) {
+      const pendingUrls = await this.database.getPendingUrls(100);
+      if (pendingUrls.length > 0) {
+        console.log(`📋 Encontradas ${pendingUrls.length} URLs pendientes de procesar`);
+        for (const url of pendingUrls) {
+          if (!this.visitedUrls.has(url)) {
+            this.urlQueue.push({ url, depth: 1 }); // Profundidad 1 para URLs pendientes
+          }
+        }
+      }
+    }
+
+    // Agregar URLs semilla a la cola (solo si no fueron visitadas)
     for (const url of seedUrls) {
-      if (!await this.database.isUrlVisited(url)) {
+      if (!await this.database.isUrlVisited(url) && !this.visitedUrls.has(url)) {
         this.urlQueue.push({ url, depth: 0 });
       }
     }
 
-    console.log(`📋 Iniciando crawler con ${this.urlQueue.length} URLs semilla`);
+    console.log(`📋 Iniciando crawler con ${this.urlQueue.length} URLs en cola`);
 
     while (this.urlQueue.length > 0 && this.pagesVisited < this.maxPages) {
       const { url, depth } = this.urlQueue.shift();
@@ -101,22 +115,84 @@ class AutonomousCrawler {
   }
 
   async crawlPage(url, depth) {
+    // Verificar si ya fue visitada exitosamente
+    if (await this.database.isUrlVisited(url)) {
+      console.log(`   ⏭️  URL ya visitada, saltando: ${url}`);
+      return;
+    }
+
+    // Verificar si está marcada como inválida (y no reintentar si tiene muchos intentos)
+    const invalidUrl = await this.database.isUrlInvalid(url);
+    if (invalidUrl) {
+      if (invalidUrl.retry_count >= 3) {
+        console.log(`   🚫 URL marcada como inválida (${invalidUrl.retry_count} intentos), saltando: ${url}`);
+        return;
+      }
+      console.log(`   🔄 Reintentando URL previamente inválida (intento ${invalidUrl.retry_count + 1}): ${url}`);
+    }
+
+    // Agregar a visitedUrls temporalmente (solo en memoria)
     this.visitedUrls.add(url);
     this.pagesVisited++;
 
     console.log(`\n🔍 [${this.pagesVisited}/${this.maxPages}] Profundidad ${depth}: ${url}`);
 
-    const page = await this.browser.newPage();
-    
+    let page;
     try {
-      // Configurar protección anti-bot
-      await this.antiBot.setupPage(page, this.lastUrl);
+      // Pequeño delay antes de crear nueva página para evitar sobrecarga
+      if (this.pagesVisited > 1) {
+        await this.antiBot.randomDelay(500, 1500);
+      }
+      
+      // Crear nueva página con retry en caso de timeout
+      let retries = 3;
+      let pageCreationFailed = false;
+      while (retries > 0) {
+        try {
+          page = await this.browser.newPage();
+          break;
+        } catch (pageError) {
+          retries--;
+          if (pageError.message.includes('timeout') || pageError.message.includes('ProtocolError')) {
+            if (retries > 0) {
+              console.log(`   ⚠️  Timeout/ProtocolError al crear página, reintentando... (${retries} intentos restantes)`);
+              await this.antiBot.randomDelay(5000, 10000);
+            } else {
+              console.error(`   ❌ No se pudo crear página después de 3 intentos`);
+              pageCreationFailed = true;
+              // Marcar URL como inválida por protocol error
+              await this.database.markUrlInvalid(url, 'protocol_error', `Error al crear página: ${pageError.message}`);
+              // No lanzar error, simplemente retornar para continuar con siguiente URL
+              this.visitedUrls.delete(url);
+              this.pagesVisited--;
+              return;
+            }
+          } else {
+            throw pageError;
+          }
+        }
+      }
       
       // Configurar timeouts más largos para páginas dinámicas
       page.setDefaultNavigationTimeout(60000);
       page.setDefaultTimeout(60000);
+      
+      // Configurar protección anti-bot con manejo de errores
+      try {
+        await this.antiBot.setupPage(page, this.lastUrl);
+      } catch (setupError) {
+        if (setupError.message.includes('timeout') || setupError.message.includes('ProtocolError')) {
+          console.log(`   ⚠️  Timeout en setupPage, continuando sin algunas protecciones...`);
+          // Continuar sin algunas protecciones si hay timeout
+          await page.setUserAgent(this.antiBot.getRandomUserAgent());
+          await page.setViewport({ width: 1920, height: 1080 });
+        } else {
+          throw setupError;
+        }
+      }
 
       // Navegar a la página con múltiples estrategias de espera
+      let navigationFailed = false;
       try {
         await page.goto(url, {
           waitUntil: 'networkidle2',
@@ -124,17 +200,33 @@ class AutonomousCrawler {
         });
       } catch (navErr) {
         console.log(`   ⚠️  Reintentando navegación (fallback load) por error: ${navErr.message}`);
-        // Reintento con waitUntil 'load' y timeout más alto
-        await page.goto(url, {
-          waitUntil: 'load',
-          timeout: 90000
-        });
+        try {
+          // Reintento con waitUntil 'load' y timeout más alto
+          await page.goto(url, {
+            waitUntil: 'load',
+            timeout: 90000
+          });
+        } catch (retryErr) {
+          // Si el reintento también falla, marcar como inválida y lanzar error
+          navigationFailed = true;
+          await this.database.markUrlInvalid(url, 'navigation_timeout', retryErr.message);
+          // Cerrar página antes de lanzar error
+          if (page) {
+            try {
+              await page.close();
+            } catch (e) {}
+          }
+          throw retryErr;
+        }
       }
 
       // Verificar si hay bloqueo
       const isBlocked = await this.antiBot.handleBlocking(page, url);
       if (isBlocked) {
-        console.log(`   ⚠️  Página bloqueada, saltando...`);
+        console.log(`   ⚠️  Página bloqueada, marcando como inválida...`);
+        await this.database.markUrlInvalid(url, 'blocked', 'Página bloqueada por protección anti-bot');
+        this.visitedUrls.delete(url);
+        this.pagesVisited--;
         this.lastUrl = url;
         return;
       }
@@ -159,7 +251,7 @@ class AutonomousCrawler {
 
       console.log(`   📊 Relevancia: ${relevance.score} (${relevance.contentType})`);
 
-      // Marcar URL como visitada
+      // Marcar URL como visitada SOLO si se procesó exitosamente
       const urlId = await this.database.markUrlVisited(
         url,
         relevance.score,
@@ -200,8 +292,13 @@ class AutonomousCrawler {
         const promisingLinks = this.relevanceDetector.filterPromisingLinks(links, url);
         
         for (const link of promisingLinks) {
+          // Verificar que no esté visitada, no sea inválida, y sea prometedora
+          const isInvalid = await this.database.isUrlInvalid(link);
+          const shouldSkip = isInvalid && isInvalid.retry_count >= 3;
+          
           if (!this.visitedUrls.has(link) && 
               !await this.database.isUrlVisited(link) &&
+              !shouldSkip &&
               this.relevanceDetector.isPromisingUrl(link)) {
             this.urlQueue.push({ url: link, depth: depth + 1 });
           }
@@ -215,8 +312,45 @@ class AutonomousCrawler {
 
     } catch (error) {
       console.error(`   ❌ Error procesando página: ${error.message}`);
+      
+      // Verificar si ya fue marcada como inválida (para evitar doble marcado)
+      const alreadyInvalid = await this.database.isUrlInvalid(url);
+      
+      if (!alreadyInvalid) {
+        // Determinar tipo de error
+        let errorType = 'unknown_error';
+        if (error.message.includes('ProtocolError') || error.message.includes('addScriptToEvaluateOnNewDocument')) {
+          errorType = 'protocol_error';
+        } else if (error.message.includes('timeout') && !error.message.includes('navigation_timeout')) {
+          errorType = 'timeout';
+        } else if (error.message.includes('net::ERR') || error.message.includes('Navigation failed')) {
+          errorType = 'network_error';
+        } else if (error.message.includes('blocked') || error.message.includes('captcha')) {
+          errorType = 'blocked';
+        } else if (error.message.includes('404') || error.message.includes('Not Found')) {
+          errorType = 'not_found';
+        }
+        
+        // Marcar como inválida según el tipo de error (solo si no fue marcada antes)
+        await this.database.markUrlInvalid(url, errorType, error.message);
+      }
+      
+      // NO marcar como visitada si falló - permitirá reintento
+      this.visitedUrls.delete(url); // Remover del Set para permitir reintento
+      this.pagesVisited--; // Descontar el contador
+      
+      if (error.message.includes('timeout') || error.message.includes('ProtocolError')) {
+        console.log(`   ⚠️  Timeout/ProtocolError detectado, esperando antes de continuar...`);
+        await this.antiBot.randomDelay(5000, 10000);
+      }
     } finally {
-      await page.close();
+      if (page) {
+        try {
+          await page.close();
+        } catch (closeError) {
+          console.log(`   ⚠️  Error al cerrar página: ${closeError.message}`);
+        }
+      }
     }
   }
 
@@ -340,7 +474,7 @@ class AutonomousCrawler {
   async scrollPage(page) {
     try {
       // Obtener altura de la página
-      const bodyHeight = await page.evaluate(() => document.body.scrollHeight);
+      let bodyHeight = await page.evaluate(() => document.body.scrollHeight);
       const viewportHeight = await page.evaluate(() => window.innerHeight);
       
       // Hacer scroll progresivo
