@@ -1,0 +1,29 @@
+{
+  "name": "scrapper-vehicle",
+  "version": "1.0.0",
+  "description": "Scraper autónomo para extraer información de vehículos y autopartes",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": [
+    "scraper",
+    "vehicles",
+    "autopartes",
+    "crawler"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "puppeteer": "^21.6.1",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "puppeteer-extra-plugin-anonymize-ua": "^2.4.6",
+    "sqlite3": "^5.1.6",
+    "cheerio": "^1.0.0-rc.12",
+    "url": "^0.11.4"
+  }
+}
+
