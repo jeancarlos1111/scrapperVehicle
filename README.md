@@ -6,7 +6,7 @@ Un scraper inteligente que explora la web de forma autónoma, identifica página
 
 - **Exploración Autónoma**: Navega por la web sin necesidad de URLs específicas
 - **Detección Inteligente**: Identifica automáticamente contenido relevante sobre vehículos y autopartes
-- **Extracción de Datos**: Extrae información estructurada (año, marca, modelo, precio, kilometraje, etc.)
+- **Extracción de Datos**: Extrae información estructurada (año, marca, modelo, condición, descripción)
 - **Base de Datos SQLite**: Almacena todos los datos en una base de datos local
 - **Navegación Inteligente**: Sigue enlaces prometedores basándose en relevancia
 - **Soporte para Páginas Dinámicas**: ✅ Compatible con React, Vue, Angular y otras SPAs (Single Page Applications)
@@ -68,10 +68,10 @@ Almacena información de vehículos extraídos:
 - Año
 - Marca
 - Modelo
-- Precio
-- Kilometraje
 - Condición (nuevo/usado/seminuevo)
 - Descripción
+
+**Nota**: Los vehículos son únicos por la combinación de marca + modelo + año. No se extraen precio ni kilometraje.
 
 ### `parts`
 Almacena información de autopartes:
@@ -79,7 +79,6 @@ Almacena información de autopartes:
 - Número de parte
 - Marca
 - Vehículo compatible
-- Precio
 - Descripción
 
 ## ⚙️ Configuración

@@ -47,8 +47,6 @@ class Database {
         year INTEGER,
         brand TEXT,
         model TEXT,
-        price REAL,
-        mileage INTEGER,
         condition TEXT,
         description TEXT,
         extracted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -65,7 +63,6 @@ class Database {
         part_number TEXT,
         brand TEXT,
         compatible_vehicle TEXT,
-        price REAL,
         description TEXT,
         extracted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (url_id) REFERENCES visited_urls(id)
@@ -114,12 +111,10 @@ class Database {
     const run = promisify(this.db.run.bind(this.db));
     try {
       await run(
-        `INSERT INTO vehicles (url_id, year, brand, model, price, mileage, condition, description)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO vehicles (url_id, year, brand, model, condition, description)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(brand, model, year) DO UPDATE SET
            url_id = COALESCE(excluded.url_id, url_id),
-           price = COALESCE(excluded.price, price),
-           mileage = COALESCE(excluded.mileage, mileage),
            condition = COALESCE(excluded.condition, condition),
            description = COALESCE(excluded.description, description),
            extracted_at = CURRENT_TIMESTAMP`,
@@ -128,8 +123,6 @@ class Database {
           vehicleData.year,
           vehicleData.brand,
           vehicleData.model,
-          vehicleData.price,
-          vehicleData.mileage,
           vehicleData.condition,
           vehicleData.description
         ]
@@ -144,15 +137,14 @@ class Database {
     const run = promisify(this.db.run.bind(this.db));
     try {
       await run(
-        `INSERT INTO parts (url_id, part_name, part_number, brand, compatible_vehicle, price, description)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO parts (url_id, part_name, part_number, brand, compatible_vehicle, description)
+         VALUES (?, ?, ?, ?, ?, ?)`,
         [
           partData.urlId,
           partData.partName,
           partData.partNumber,
           partData.brand,
           partData.compatibleVehicle,
-          partData.price,
           partData.description
         ]
       );

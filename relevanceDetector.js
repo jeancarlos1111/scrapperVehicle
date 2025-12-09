@@ -6,7 +6,7 @@ class RelevanceDetector {
       'marca', 'modelo', 'año', 'kilometraje', 'km',
       'toyota', 'honda', 'ford', 'chevrolet', 'nissan', 'volkswagen',
       'bmw', 'mercedes', 'audi', 'mazda', 'hyundai', 'kia',
-      'precio', 'venta', 'usado', 'nuevo', 'seminuevo',
+      'venta', 'usado', 'nuevo', 'seminuevo',
       'motor', 'transmisión', 'combustible', 'gasolina', 'diésel',
       'sedan', 'suv', 'pickup', 'hatchback', 'coupe'
     ];
@@ -22,9 +22,6 @@ class RelevanceDetector {
 
     // Patrones para detectar años
     this.yearPattern = /\b(19|20)\d{2}\b/g;
-    
-    // Patrones para detectar precios
-    this.pricePattern = /\$\s*[\d,]+|\d+[\d,]*\s*(pesos|dólares|usd|mxn)/gi;
   }
 
   /**
@@ -58,12 +55,6 @@ class RelevanceDetector {
     const yearMatches = fullText.match(this.yearPattern);
     if (yearMatches) {
       vehicleScore += yearMatches.length * 2;
-    }
-
-    // Detectar precios (indicio de contenido comercial)
-    const priceMatches = fullText.match(this.pricePattern);
-    if (priceMatches) {
-      score += priceMatches.length;
     }
 
     // Bonus por URLs que contienen palabras clave

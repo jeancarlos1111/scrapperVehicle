@@ -117,14 +117,6 @@ class DataExtractor {
       }
     }
 
-    // Extraer precio
-    const priceMatch = context.match(/\$?\s*(\d{1,3}(?:[,\s]\d{3})*)/);
-    const price = priceMatch ? parseFloat(priceMatch[1].replace(/[,\s]/g, '')) : null;
-
-    // Extraer kilometraje
-    const mileageMatch = context.match(/(\d{1,3}(?:[,\s]\d{3})*)\s*(?:km|kilómetros|kilometros|miles)/i);
-    const mileage = mileageMatch ? parseInt(mileageMatch[1].replace(/[,\s]/g, '')) : null;
-
     // Extraer condición
     let condition = null;
     if (context.includes('nuevo') || context.includes('new')) condition = 'nuevo';
@@ -138,8 +130,6 @@ class DataExtractor {
       year,
       brand: brand ? brand.charAt(0).toUpperCase() + brand.slice(1) : null,
       model: model ? model.charAt(0).toUpperCase() + model.slice(1) : null,
-      price,
-      mileage,
       condition,
       description: description || null
     };
@@ -274,13 +264,6 @@ class DataExtractor {
       }
     }
 
-    // Extraer precio
-    const priceMatch =
-      $elem.find('.price, [itemprop="price"], .precio, .product-price').first().text() ||
-      text.match(/\$?\s*(\d{1,3}(?:[,\s]\d{3})*(?:\.\d{2})?)/);
-    const priceStr = typeof priceMatch === 'string' ? priceMatch : priceMatch?.[1];
-    const price = priceStr ? parseFloat(priceStr.replace(/[^\d.]/g, '')) : null;
-
     // Extraer descripción
     const description = $elem.find('p, .description, .desc, [itemprop="description"]').first().text().trim() || 
                        text.substring(0, 500);
@@ -290,7 +273,6 @@ class DataExtractor {
       partNumber,
       brand,
       compatibleVehicle,
-      price,
       description: description || null
     };
   }
