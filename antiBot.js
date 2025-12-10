@@ -73,63 +73,83 @@ class AntiBot {
     await page.setViewport(viewport);
 
     // Eliminar indicadores de automatización
-    await page.evaluateOnNewDocument(() => {
-      // Ocultar webdriver
-      Object.defineProperty(navigator, 'webdriver', {
-        get: () => false,
+    // Envolver en try-catch para manejar timeouts de protocolo
+    try {
+      await page.evaluateOnNewDocument(() => {
+        // Ocultar webdriver
+        Object.defineProperty(navigator, 'webdriver', {
+          get: () => false,
+        });
+
+        // Modificar permisos
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+          parameters.name === 'notifications' ?
+            Promise.resolve({ state: Notification.permission }) :
+            originalQuery(parameters)
+        );
+
+        // Modificar plugins
+        Object.defineProperty(navigator, 'plugins', {
+          get: () => [1, 2, 3, 4, 5],
+        });
+
+        // Modificar languages
+        Object.defineProperty(navigator, 'languages', {
+          get: () => ['es-MX', 'es', 'en-US', 'en'],
+        });
+
+        // Modificar chrome
+        window.chrome = {
+          runtime: {},
+        };
+
+        // Modificar permissions
+        const originalQuery2 = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+          parameters.name === 'notifications' ?
+            Promise.resolve({ state: Notification.permission }) :
+            originalQuery2(parameters)
+        );
       });
-
-      // Modificar permisos
-      const originalQuery = window.navigator.permissions.query;
-      window.navigator.permissions.query = (parameters) => (
-        parameters.name === 'notifications' ?
-          Promise.resolve({ state: Notification.permission }) :
-          originalQuery(parameters)
-      );
-
-      // Modificar plugins
-      Object.defineProperty(navigator, 'plugins', {
-        get: () => [1, 2, 3, 4, 5],
-      });
-
-      // Modificar languages
-      Object.defineProperty(navigator, 'languages', {
-        get: () => ['es-MX', 'es', 'en-US', 'en'],
-      });
-
-      // Modificar chrome
-      window.chrome = {
-        runtime: {},
-      };
-
-      // Modificar permissions
-      const originalQuery2 = window.navigator.permissions.query;
-      window.navigator.permissions.query = (parameters) => (
-        parameters.name === 'notifications' ?
-          Promise.resolve({ state: Notification.permission }) :
-          originalQuery2(parameters)
-      );
-    });
+    } catch (error) {
+      // Si falla evaluateOnNewDocument, continuar sin estas protecciones
+      // No es crítico para el funcionamiento básico
+      if (error.message.includes('timeout') || error.message.includes('ProtocolError') || error.message.includes('addScriptToEvaluateOnNewDocument')) {
+        // Silenciosamente continuar sin estas protecciones
+      } else {
+        throw error;
+      }
+    }
 
     // Inyectar scripts para ocultar automatización
-    await page.evaluateOnNewDocument(() => {
-      // Ocultar que es headless
-      Object.defineProperty(navigator, 'webdriver', {
-        get: () => undefined,
-      });
+    try {
+      await page.evaluateOnNewDocument(() => {
+        // Ocultar que es headless
+        Object.defineProperty(navigator, 'webdriver', {
+          get: () => undefined,
+        });
 
-      // Modificar getParameter para WebGL
-      const getParameter = WebGLRenderingContext.prototype.getParameter;
-      WebGLRenderingContext.prototype.getParameter = function(parameter) {
-        if (parameter === 37445) {
-          return 'Intel Inc.';
-        }
-        if (parameter === 37446) {
-          return 'Intel Iris OpenGL Engine';
-        }
-        return getParameter.call(this, parameter);
-      };
-    });
+        // Modificar getParameter para WebGL
+        const getParameter = WebGLRenderingContext.prototype.getParameter;
+        WebGLRenderingContext.prototype.getParameter = function(parameter) {
+          if (parameter === 37445) {
+            return 'Intel Inc.';
+          }
+          if (parameter === 37446) {
+            return 'Intel Iris OpenGL Engine';
+          }
+          return getParameter.call(this, parameter);
+        };
+      });
+    } catch (error) {
+      // Si falla evaluateOnNewDocument, continuar sin estas protecciones
+      if (error.message.includes('timeout') || error.message.includes('ProtocolError') || error.message.includes('addScriptToEvaluateOnNewDocument')) {
+        // Silenciosamente continuar sin estas protecciones
+      } else {
+        throw error;
+      }
+    }
   }
 
   /**

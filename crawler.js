@@ -47,7 +47,7 @@ class AutonomousCrawler {
       ],
       ignoreHTTPSErrors: true,
       defaultViewport: null,
-      protocolTimeout: 300000 // 300 segundos (5 minutos) para evitar timeouts en páginas complejas
+      protocolTimeout: 600000 // 600 segundos (10 minutos) para evitar timeouts en páginas complejas
     });
     console.log('✅ Navegador iniciado con modo stealth');
   }
@@ -100,14 +100,27 @@ class AutonomousCrawler {
       try {
         await this.crawlPage(url, depth);
         // Delay aleatorio más humano entre requests
-        await this.antiBot.randomDelay(
-          this.delay,
-          this.delay * 2
-        );
+        try {
+          await this.antiBot.randomDelay(
+            this.delay,
+            this.delay * 2
+          );
+        } catch (delayError) {
+          // Si falla el delay, continuar de todas formas
+          console.log(`   ⚠️  Error en delay (ignorado): ${delayError?.message || 'Error desconocido'}`);
+        }
       } catch (error) {
-        console.error(`❌ Error al procesar ${url}:`, error.message);
+        // Asegurarse de capturar cualquier error, incluso si no tiene message
+        const errorMessage = error?.message || error?.toString() || 'Error desconocido';
+        console.error(`❌ Error al procesar ${url}: ${errorMessage}`);
         // Si hay error, esperar más antes de continuar
-        await this.antiBot.randomDelay(5000, 10000);
+        try {
+          await this.antiBot.randomDelay(5000, 10000);
+        } catch (delayError) {
+          // Si falla el delay, continuar de todas formas
+          console.log(`   ⚠️  Error en delay después de error (ignorado): ${delayError?.message || 'Error desconocido'}`);
+        }
+        // Continuar con la siguiente URL - NO lanzar el error
       }
     }
 
@@ -147,30 +160,69 @@ class AutonomousCrawler {
       // Crear nueva página con retry en caso de timeout
       let retries = 3;
       let pageCreationFailed = false;
-      while (retries > 0) {
+      while (retries > 0 && !pageCreationFailed) {
         try {
-          page = await this.browser.newPage();
+          // Pequeño delay antes de crear página para evitar sobrecarga del protocolo
+          if (retries < 3) {
+            await this.antiBot.randomDelay(3000, 6000);
+          }
+          // Intentar crear página con timeout explícito
+          page = await Promise.race([
+            this.browser.newPage(),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Page creation timeout')), 120000)
+            )
+          ]);
           break;
         } catch (pageError) {
           retries--;
-          if (pageError.message.includes('timeout') || pageError.message.includes('ProtocolError')) {
+          const isProtocolError = pageError.message.includes('timeout') || 
+                                  pageError.message.includes('ProtocolError') || 
+                                  pageError.message.includes('addScriptToEvaluateOnNewDocument') ||
+                                  pageError.message.includes('Page creation timeout');
+          
+          if (isProtocolError) {
             if (retries > 0) {
               console.log(`   ⚠️  Timeout/ProtocolError al crear página, reintentando... (${retries} intentos restantes)`);
-              await this.antiBot.randomDelay(5000, 10000);
+              // Delay más largo cuando hay errores de protocolo
+              await this.antiBot.randomDelay(10000, 20000);
             } else {
-              console.error(`   ❌ No se pudo crear página después de 3 intentos`);
+              console.error(`   ❌ No se pudo crear página después de 3 intentos: ${pageError.message}`);
               pageCreationFailed = true;
               // Marcar URL como inválida por protocol error
-              await this.database.markUrlInvalid(url, 'protocol_error', `Error al crear página: ${pageError.message}`);
+              try {
+                await this.database.markUrlInvalid(url, 'protocol_error', `Error al crear página: ${pageError.message}`);
+              } catch (dbError) {
+                console.error(`   ⚠️  Error al marcar URL como inválida: ${dbError.message}`);
+              }
               // No lanzar error, simplemente retornar para continuar con siguiente URL
               this.visitedUrls.delete(url);
               this.pagesVisited--;
               return;
             }
           } else {
-            throw pageError;
+            // Para otros errores, también intentar continuar
+            console.error(`   ⚠️  Error inesperado al crear página: ${pageError.message}`);
+            if (retries > 0) {
+              await this.antiBot.randomDelay(5000, 10000);
+            } else {
+              pageCreationFailed = true;
+              try {
+                await this.database.markUrlInvalid(url, 'unknown_error', `Error al crear página: ${pageError.message}`);
+              } catch (dbError) {
+                console.error(`   ⚠️  Error al marcar URL como inválida: ${dbError.message}`);
+              }
+              this.visitedUrls.delete(url);
+              this.pagesVisited--;
+              return;
+            }
           }
         }
+      }
+      
+      // Si no se pudo crear la página después de todos los intentos
+      if (pageCreationFailed || !page) {
+        return;
       }
       
       // Configurar timeouts más largos para páginas dinámicas
@@ -181,7 +233,7 @@ class AutonomousCrawler {
       try {
         await this.antiBot.setupPage(page, this.lastUrl);
       } catch (setupError) {
-        if (setupError.message.includes('timeout') || setupError.message.includes('ProtocolError')) {
+        if (setupError.message.includes('timeout') || setupError.message.includes('ProtocolError') || setupError.message.includes('addScriptToEvaluateOnNewDocument')) {
           console.log(`   ⚠️  Timeout en setupPage, continuando sin algunas protecciones...`);
           // Continuar sin algunas protecciones si hay timeout
           await page.setUserAgent(this.antiBot.getRandomUserAgent());
@@ -311,44 +363,65 @@ class AutonomousCrawler {
       this.lastUrl = url;
 
     } catch (error) {
-      console.error(`   ❌ Error procesando página: ${error.message}`);
+      // Asegurarse de capturar cualquier error, incluso si no tiene message
+      const errorMessage = error?.message || error?.toString() || 'Error desconocido';
+      console.error(`   ❌ Error procesando página: ${errorMessage}`);
       
       // Verificar si ya fue marcada como inválida (para evitar doble marcado)
-      const alreadyInvalid = await this.database.isUrlInvalid(url);
+      let alreadyInvalid = false;
+      try {
+        alreadyInvalid = await this.database.isUrlInvalid(url);
+      } catch (dbError) {
+        console.error(`   ⚠️  Error al verificar URL inválida: ${dbError.message}`);
+      }
       
       if (!alreadyInvalid) {
         // Determinar tipo de error
         let errorType = 'unknown_error';
-        if (error.message.includes('ProtocolError') || error.message.includes('addScriptToEvaluateOnNewDocument')) {
+        const errorStr = errorMessage.toLowerCase();
+        if (errorStr.includes('protocolerror') || errorStr.includes('addscripttoevaluateonnewdocument')) {
           errorType = 'protocol_error';
-        } else if (error.message.includes('timeout') && !error.message.includes('navigation_timeout')) {
+        } else if (errorStr.includes('timeout') && !errorStr.includes('navigation_timeout')) {
           errorType = 'timeout';
-        } else if (error.message.includes('net::ERR') || error.message.includes('Navigation failed')) {
+        } else if (errorStr.includes('net::err') || errorStr.includes('navigation failed')) {
           errorType = 'network_error';
-        } else if (error.message.includes('blocked') || error.message.includes('captcha')) {
+        } else if (errorStr.includes('blocked') || errorStr.includes('captcha')) {
           errorType = 'blocked';
-        } else if (error.message.includes('404') || error.message.includes('Not Found')) {
+        } else if (errorStr.includes('404') || errorStr.includes('not found')) {
           errorType = 'not_found';
         }
         
         // Marcar como inválida según el tipo de error (solo si no fue marcada antes)
-        await this.database.markUrlInvalid(url, errorType, error.message);
+        try {
+          await this.database.markUrlInvalid(url, errorType, errorMessage);
+        } catch (dbError) {
+          console.error(`   ⚠️  Error al marcar URL como inválida: ${dbError.message}`);
+        }
       }
       
       // NO marcar como visitada si falló - permitirá reintento
       this.visitedUrls.delete(url); // Remover del Set para permitir reintento
       this.pagesVisited--; // Descontar el contador
       
-      if (error.message.includes('timeout') || error.message.includes('ProtocolError')) {
+      const errorStr = errorMessage.toLowerCase();
+      if (errorStr.includes('timeout') || errorStr.includes('protocolerror') || errorStr.includes('addscripttoevaluateonnewdocument')) {
         console.log(`   ⚠️  Timeout/ProtocolError detectado, esperando antes de continuar...`);
-        await this.antiBot.randomDelay(5000, 10000);
+        // Delay más largo para errores de protocolo
+        try {
+          await this.antiBot.randomDelay(10000, 20000);
+        } catch (delayError) {
+          // Si falla el delay, continuar de todas formas
+          console.error(`   ⚠️  Error en delay: ${delayError.message}`);
+        }
       }
     } finally {
+      // Asegurarse de cerrar la página siempre, incluso si hay errores
       if (page) {
         try {
           await page.close();
         } catch (closeError) {
-          console.log(`   ⚠️  Error al cerrar página: ${closeError.message}`);
+          // Ignorar errores al cerrar página
+          console.log(`   ⚠️  Error al cerrar página (ignorado): ${closeError?.message || 'Error desconocido'}`);
         }
       }
     }
